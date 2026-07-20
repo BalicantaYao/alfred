@@ -73,6 +73,83 @@ function formatList(ownerId) {
   return `🛒 購物清單\n${sections.join("\n")}\n\n買到了就輸入「買到 編號」`;
 }
 
+// 目前清單快照,給 LLM 解析器當上下文用
+export function getItems(ownerId) {
+  return orderedItems(ownerId).map((item) => ({
+    name: item.name,
+    store: item.store || null,
+  }));
+}
+
+// 依名稱刪除(LLM 解析出的名稱可能是簡稱,做寬鬆比對)
+function removeByNames(ownerId, names) {
+  const items = lists[ownerId] || [];
+  const toRemove = new Set();
+  const removed = [];
+  const notFound = [];
+  for (const name of names) {
+    const match = items.find(
+      (item) =>
+        !toRemove.has(item) &&
+        (item.name === name || item.name.includes(name) || name.includes(item.name))
+    );
+    if (match) {
+      toRemove.add(match);
+      removed.push(match);
+    } else {
+      notFound.push(name);
+    }
+  }
+  lists[ownerId] = items.filter((item) => !toRemove.has(item));
+  saveLists();
+  return { removed, notFound };
+}
+
+// 套用 LLM 解析出的意圖;無法處理時回傳 null,讓呼叫端 fallback
+export function applyParsedIntent(ownerId, parsed) {
+  if (!parsed || typeof parsed.intent !== "string") return null;
+
+  switch (parsed.intent) {
+    case "add": {
+      const items = (parsed.items || []).filter(
+        (it) => it && typeof it.name === "string" && it.name.trim()
+      );
+      if (items.length === 0) return null;
+      for (const it of items) {
+        addItem(ownerId, it.name.trim(), it.store || null);
+      }
+      const added = items
+        .map((it) => `${it.name.trim()}${it.store ? `(${it.store})` : ""}`)
+        .join("、");
+      return `已加入:${added}\n\n${formatList(ownerId)}`;
+    }
+    case "list":
+      return formatList(ownerId);
+    case "remove": {
+      const names = (parsed.items || [])
+        .map((it) => it && typeof it.name === "string" && it.name.trim())
+        .filter(Boolean);
+      if (names.length === 0) return null;
+      const { removed, notFound } = removeByNames(ownerId, names);
+      const parts = [];
+      if (removed.length > 0) {
+        parts.push(`已刪除:${removed.map((r) => r.name).join("、")}`);
+      }
+      if (notFound.length > 0) {
+        parts.push(`清單裡找不到:${notFound.join("、")}`);
+      }
+      parts.push("", formatList(ownerId));
+      return parts.join("\n");
+    }
+    case "clear":
+      delete lists[ownerId];
+      saveLists();
+      return "購物清單已清空 🧹";
+    default:
+      return null;
+  }
+}
+
 export const SHOPPING_HELP = [
   "🛒 購物清單指令:",
   "- 買 牛奶 @家樂福:新增待買項目(@後面是要去買的地方,可省略)",
