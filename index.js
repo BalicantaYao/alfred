@@ -26,6 +26,13 @@ app.get("/", (req, res) => {
   res.send("Alfred LINE Bot is running.");
 });
 
+// 瀏覽器直接開 /webhook 是 GET,給個說明訊息避免誤會壞掉
+app.get("/webhook", (req, res) => {
+  res.send(
+    "Webhook endpoint is alive. LINE platform sends POST requests here — use the Verify button in LINE Developers Console to test."
+  );
+});
+
 // LINE Webhook 入口。line.middleware 會驗證 X-Line-Signature,
 // 不要在這條路由之前掛 express.json(),否則簽名驗證會失敗
 app.post("/webhook", line.middleware(config), async (req, res) => {
