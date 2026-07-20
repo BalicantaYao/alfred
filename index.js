@@ -1,5 +1,12 @@
 import express from "express";
 import * as line from "@line/bot-sdk";
+import {
+  handleShoppingCommand,
+  loadLists,
+  SHOPPING_HELP,
+} from "./shoppingList.js";
+
+loadLists();
 
 const config = {
   channelSecret: process.env.LINE_CHANNEL_SECRET,
@@ -34,7 +41,10 @@ async function handleEvent(event) {
   }
 
   const userText = event.message.text.trim();
-  const replyText = buildReply(userText);
+  // 群組/聊天室共用一份清單,一對一聊天則是個人清單
+  const ownerId =
+    event.source.groupId || event.source.roomId || event.source.userId;
+  const replyText = buildReply(userText, ownerId);
 
   await client.replyMessage({
     replyToken: event.replyToken,
@@ -42,10 +52,16 @@ async function handleEvent(event) {
   });
 }
 
-function buildReply(text) {
+function buildReply(text, ownerId) {
   if (text === "help" || text === "幫助") {
-    return "我是 Alfred 🤖\n目前支援:\n- 輸入任何文字,我會回覆你\n- 輸入「help」或「幫助」看說明";
+    return `我是 Alfred 🤖\n\n${SHOPPING_HELP}\n\n其他文字我會直接回覆你`;
   }
+
+  const shoppingReply = handleShoppingCommand(ownerId, text);
+  if (shoppingReply !== null) {
+    return shoppingReply;
+  }
+
   return `你說了:${text}`;
 }
 
