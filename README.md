@@ -128,7 +128,7 @@ ngrok http 3000
 ```js
 function buildReply(text) {
   if (text === "天氣") return "今天天氣不錯 ☀️";
-  return `你說了:${text}`;
+  return null; // 回傳 null 表示不回覆
 }
 ```
 
