@@ -5,8 +5,39 @@
 ## 功能
 
 - 接收 LINE Webhook 事件(含 X-Line-Signature 簽名驗證)
+- 🛒 **購物清單**:在聊天中管理待買事項,可依購買地點(蝦皮、家樂福⋯)分組
 - 回覆文字訊息(echo bot,可在 `index.js` 的 `buildReply()` 擴充自己的邏輯)
 - `GET /` 健康檢查端點
+
+## 購物清單指令
+
+| 指令 | 說明 |
+|------|------|
+| `買 牛奶 @家樂福` | 新增待買項目,`@` 後面是要去買的地方(可省略,會歸到「未分類」) |
+| `加 電池` | 同「買」 |
+| `清單` | 查看購物清單,依地點分組並編號 |
+| `買到 2` | 買到了,刪除第 2 項(可一次多個:`買到 1 3`,也可用「刪除」) |
+| `清空清單` | 刪除全部項目 |
+| `help` / `幫助` | 顯示指令說明 |
+
+一對一聊天是個人清單;把 Bot 加進群組的話,整個群組共用一份清單。
+
+### 🧠 自由格式輸入(選用,需要 Anthropic API key)
+
+設定 `ANTHROPIC_API_KEY` 環境變數後,不用記指令格式,直接用自然語言也可以:
+
+- 「幫我記一下要去蝦皮買行動電源跟手機殼」→ 自動拆成兩個項目加入蝦皮分類
+- 「家樂福要買牛奶,另外記得買電池」→ 牛奶歸家樂福,電池歸未分類
+- 「牛奶買到了」→ 從清單刪除牛奶(簡稱也能對應,例如「電源」會對到「行動電源」)
+- 「我要買什麼?」→ 顯示清單
+
+運作方式:訊息先走精確指令(免 API 費用、零延遲),不是指令才交給 Claude
+(預設 `claude-opus-4-8`,可用 `ANTHROPIC_MODEL` 更換)解析成結構化意圖再套用到清單。
+與購物無關的訊息會維持原本的 echo 回覆。API 呼叫失敗也會自動 fallback,不會擋住回覆。
+
+清單資料存在 `data/shopping-lists.json`(可用 `DATA_DIR` 環境變數改路徑)。
+注意:Railway 的檔案系統在**重新部署後會清空**,若要永久保存,請在 Railway 專案掛一個
+Volume(例如掛載到 `/data`)並設定環境變數 `DATA_DIR=/data`。
 
 ## 事前準備:建立 LINE Channel
 
@@ -55,10 +86,12 @@ ngrok http 3000
 ## 專案結構
 
 ```
-├── index.js        # Express server + LINE webhook 處理
+├── index.js          # Express server + LINE webhook 處理
+├── shoppingList.js   # 購物清單指令解析與 JSON 檔持久化
+├── llmParser.js      # Claude API 自由格式意圖解析(選用)
 ├── package.json
-├── railway.json    # Railway 部署設定
-├── .env.example    # 環境變數範本
+├── railway.json      # Railway 部署設定
+├── .env.example      # 環境變數範本
 └── README.md
 ```
 

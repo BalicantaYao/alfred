@@ -1,5 +1,15 @@
 import express from "express";
 import * as line from "@line/bot-sdk";
+import {
+  applyParsedIntent,
+  getItems,
+  handleShoppingCommand,
+  loadLists,
+  SHOPPING_HELP,
+} from "./shoppingList.js";
+import { llmEnabled, parseShoppingIntent } from "./llmParser.js";
+
+loadLists();
 
 const config = {
   channelSecret: process.env.LINE_CHANNEL_SECRET,
@@ -34,7 +44,10 @@ async function handleEvent(event) {
   }
 
   const userText = event.message.text.trim();
-  const replyText = buildReply(userText);
+  // 群組/聊天室共用一份清單,一對一聊天則是個人清單
+  const ownerId =
+    event.source.groupId || event.source.roomId || event.source.userId;
+  const replyText = await buildReply(userText, ownerId);
 
   await client.replyMessage({
     replyToken: event.replyToken,
@@ -42,10 +55,34 @@ async function handleEvent(event) {
   });
 }
 
-function buildReply(text) {
+async function buildReply(text, ownerId) {
   if (text === "help" || text === "幫助") {
-    return "我是 Alfred 🤖\n目前支援:\n- 輸入任何文字,我會回覆你\n- 輸入「help」或「幫助」看說明";
+    const llmNote = llmEnabled()
+      ? "\n\n也可以直接用自然語言,例如:\n「幫我記一下要去蝦皮買行動電源跟手機殼」\n「牛奶買到了」"
+      : "";
+    return `我是 Alfred 🤖\n\n${SHOPPING_HELP}${llmNote}`;
   }
+
+  // 1. 精確指令(免費、零延遲)
+  const shoppingReply = handleShoppingCommand(ownerId, text);
+  if (shoppingReply !== null) {
+    return shoppingReply;
+  }
+
+  // 2. 自由格式:用 Claude 解析意圖後套用到清單
+  if (llmEnabled()) {
+    try {
+      const parsed = await parseShoppingIntent(text, getItems(ownerId));
+      const llmReply = applyParsedIntent(ownerId, parsed);
+      if (llmReply !== null) {
+        return llmReply;
+      }
+    } catch (err) {
+      // API 失敗時不擋住回覆,fallback 到 echo
+      console.error("LLM parse error:", err);
+    }
+  }
+
   return `你說了:${text}`;
 }
 
