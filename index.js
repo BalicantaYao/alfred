@@ -45,7 +45,21 @@ async function handleEvent(event) {
     return;
   }
 
-  const userText = event.message.text.trim();
+  const inGroup = Boolean(event.source.groupId || event.source.roomId);
+  let text = event.message.text;
+
+  if (inGroup) {
+    const mentionees = event.message.mention?.mentionees ?? [];
+    const selfMentions = mentionees.filter((m) => m.isSelf);
+    // 群組/聊天室裡只在被 @Alfred 時才處理,其他訊息一律不回應
+    if (selfMentions.length === 0) {
+      return;
+    }
+    text = stripMentions(text, selfMentions);
+  }
+
+  // 只 @Alfred 沒帶內容時,當作在問怎麼用
+  const userText = text.trim() || "help";
   // 群組/聊天室共用一份清單,一對一聊天則是個人清單
   const ownerId =
     event.source.groupId || event.source.roomId || event.source.userId;
@@ -59,6 +73,17 @@ async function handleEvent(event) {
     replyToken: event.replyToken,
     messages: [{ type: "text", text: replyText }],
   });
+}
+
+// 從訊息文字中移除 @Alfred 的 mention 片段(index/length 由 LINE 提供),
+// 由後往前刪避免位移
+function stripMentions(text, mentions) {
+  return [...mentions]
+    .sort((a, b) => b.index - a.index)
+    .reduce(
+      (result, m) => result.slice(0, m.index) + result.slice(m.index + m.length),
+      text,
+    );
 }
 
 async function buildReply(text, ownerId) {
