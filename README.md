@@ -48,9 +48,18 @@ API 呼叫失敗也會自動 fallback,不會擋住回覆。
 兩種供應商都用結構化輸出(JSON schema)保證回傳合法的意圖 JSON,解析品質相近;
 Gemini 的免費額度對個人 Bot 的訊息量通常已足夠。
 
-清單資料存在 `data/shopping-lists.json`(可用 `DATA_DIR` 環境變數改路徑)。
-注意:Railway 的檔案系統在**重新部署後會清空**,若要永久保存,請在 Railway 專案掛一個
-Volume(例如掛載到 `/data`)並設定環境變數 `DATA_DIR=/data`。
+### 💾 資料儲存
+
+設定 `DATABASE_URL` 環境變數後,清單資料存在 PostgreSQL。在 Railway 上:
+
+1. 專案裡按 **Create → Database → Add PostgreSQL** 新增資料庫服務
+2. 在 Bot 服務的 **Variables** 加上 `DATABASE_URL = ${{Postgres.DATABASE_URL}}`
+
+首次啟動會自動建表;如果資料庫是空的且存在舊的 `data/shopping-lists.json`,會自動匯入。
+
+沒設定 `DATABASE_URL` 時,fallback 存在本機 JSON 檔 `data/shopping-lists.json`
+(可用 `DATA_DIR` 改路徑),適合本機開發。注意:Railway 的檔案系統在**重新部署後會清空**,
+正式環境請使用 PostgreSQL。
 
 ## 事前準備:建立 LINE Channel
 
@@ -70,6 +79,7 @@ Volume(例如掛載到 `/data`)並設定環境變數 `DATA_DIR=/data`。
    |------|-----|
    | `LINE_CHANNEL_SECRET` | LINE Channel secret |
    | `LINE_CHANNEL_ACCESS_TOKEN` | LINE Channel access token |
+   | `DATABASE_URL` | (建議)PostgreSQL 連線字串,設 `${{Postgres.DATABASE_URL}}` 引用同專案的資料庫服務 |
 
 3. 部署完成後,到 **Settings → Networking → Generate Domain** 產生公開網址,例如 `https://alfred-production.up.railway.app`
 4. 回到 LINE Developers Console 的「Messaging API」分頁:
@@ -100,8 +110,11 @@ ngrok http 3000
 
 ```
 ├── index.js          # Express server + LINE webhook 處理
-├── shoppingList.js   # 購物清單指令解析與 JSON 檔持久化
+├── shoppingList.js   # 購物清單指令解析
+├── storage.js        # 儲存層:PostgreSQL(DATABASE_URL)或本機 JSON 檔 fallback
 ├── llmParser.js      # LLM 自由格式意圖解析(選用,支援 Claude / Gemini)
+├── scripts/
+│   └── verify-db.js  # 儲存層手動驗證腳本
 ├── package.json
 ├── railway.json      # Railway 部署設定
 ├── .env.example      # 環境變數範本

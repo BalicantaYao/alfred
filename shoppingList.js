@@ -1,24 +1,11 @@
-import fs from "fs";
-import path from "path";
-
-// Railway 的檔案系統重新部署後會清空,若要永久保存請掛 Volume 並設定 DATA_DIR
-const dataDir = process.env.DATA_DIR || "./data";
-const dataFile = path.join(dataDir, "shopping-lists.json");
+import { initStorage, persist } from "./storage.js";
 
 // ownerId(使用者或群組) -> [{ name, store, createdAt }]
+// in-memory 為主,每次變動後 write-through 到 storage
 let lists = {};
 
-export function loadLists() {
-  try {
-    lists = JSON.parse(fs.readFileSync(dataFile, "utf8"));
-  } catch {
-    lists = {};
-  }
-}
-
-function saveLists() {
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.writeFileSync(dataFile, JSON.stringify(lists, null, 2));
+export async function loadLists() {
+  lists = await initStorage();
 }
 
 const UNCATEGORIZED = "未分類";
@@ -39,7 +26,7 @@ function orderedItems(ownerId) {
 function addItem(ownerId, name, store) {
   if (!lists[ownerId]) lists[ownerId] = [];
   lists[ownerId].push({ name, store: store || null, createdAt: Date.now() });
-  saveLists();
+  persist(ownerId, lists);
 }
 
 function removeByNumbers(ownerId, numbers) {
@@ -52,7 +39,7 @@ function removeByNumbers(ownerId, numbers) {
   }
   const toRemove = new Set(removed);
   lists[ownerId] = (lists[ownerId] || []).filter((item) => !toRemove.has(item));
-  saveLists();
+  persist(ownerId, lists);
   return { removed, invalid };
 }
 
@@ -101,7 +88,7 @@ function removeByNames(ownerId, names) {
     }
   }
   lists[ownerId] = items.filter((item) => !toRemove.has(item));
-  saveLists();
+  persist(ownerId, lists);
   return { removed, notFound };
 }
 
@@ -143,7 +130,7 @@ export function applyParsedIntent(ownerId, parsed) {
     }
     case "clear":
       delete lists[ownerId];
-      saveLists();
+      persist(ownerId, lists);
       return "購物清單已清空 🧹";
     default:
       return null;
@@ -197,7 +184,7 @@ export function handleShoppingCommand(ownerId, text) {
 
   if (/^(?:清空清單|清空)$/.test(text)) {
     delete lists[ownerId];
-    saveLists();
+    persist(ownerId, lists);
     return "購物清單已清空 🧹";
   }
 

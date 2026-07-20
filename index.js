@@ -9,7 +9,9 @@ import {
 } from "./shoppingList.js";
 import { llmEnabled, parseShoppingIntent } from "./llmParser.js";
 
-loadLists();
+// DATABASE_URL 有設但連不上時直接讓程序失敗,交給 Railway restart,
+// 避免默默 fallback 到 ephemeral 檔案系統造成資料無聲流失
+await loadLists();
 
 const config = {
   channelSecret: process.env.LINE_CHANNEL_SECRET,
