@@ -8,6 +8,8 @@ import {
   SHOPPING_HELP,
 } from "./shoppingList.js";
 import { llmEnabled, parseShoppingIntent } from "./llmParser.js";
+import { buildTodayAgenda, calendarEnabled } from "./calendar.js";
+import { startDailyReminder } from "./reminder.js";
 
 // DATABASE_URL 有設但連不上時直接讓程序失敗,交給 Railway restart,
 // 避免默默 fallback 到 ephemeral 檔案系統造成資料無聲流失
@@ -59,10 +61,31 @@ async function handleEvent(event) {
 
 async function buildReply(text, ownerId) {
   if (text === "help" || text === "幫助") {
+    const calendarNote = calendarEnabled()
+      ? "\n\n📅 行事曆指令:\n- 行程:查看今天的 Google Calendar 行程\n- id:查詢這個聊天的 ID(設定每日提醒推播對象用)"
+      : "";
     const llmNote = llmEnabled()
       ? "\n\n也可以直接用自然語言,例如:\n「幫我記一下要去蝦皮買行動電源跟手機殼」\n「牛奶買到了」"
       : "";
-    return `我是 Alfred 🤖\n\n${SHOPPING_HELP}${llmNote}`;
+    return `我是 Alfred 🤖\n\n${SHOPPING_HELP}${calendarNote}${llmNote}`;
+  }
+
+  // 查詢聊天 ID,用來設定每日行程提醒的推播對象(REMINDER_TO)
+  if (/^id$/i.test(text)) {
+    return `這個聊天的 ID:\n${ownerId}\n\n把它設成 REMINDER_TO 環境變數,就會收到每日行程提醒`;
+  }
+
+  // 今日行程查詢
+  if (/^(?:行程|今日行程|今天行程)$/.test(text)) {
+    if (!calendarEnabled()) {
+      return "還沒設定 Google Calendar 🙈\n請參考 README 設定 GOOGLE_SERVICE_ACCOUNT_KEY 與 GOOGLE_CALENDAR_ID";
+    }
+    try {
+      return await buildTodayAgenda();
+    } catch (err) {
+      console.error("Calendar error:", err);
+      return "查詢行事曆失敗了,請稍後再試 😢";
+    }
   }
 
   // 1. 精確指令(免費、零延遲)
@@ -105,3 +128,6 @@ const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Alfred LINE Bot listening on port ${port}`);
 });
+
+// 每天定時推播今日行程(需設定 Google Calendar 與 REMINDER_TO,詳見 README)
+startDailyReminder(client);

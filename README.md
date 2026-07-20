@@ -6,6 +6,7 @@
 
 - 接收 LINE Webhook 事件(含 X-Line-Signature 簽名驗證)
 - 🛒 **購物清單**:在聊天中管理待買事項,可依購買地點(蝦皮、家樂福⋯)分組
+- 📅 **Google Calendar 每日行程提醒**:每天固定時間把今天的行程推播到指定聊天,也可隨時輸入「行程」查詢
 - 回覆文字訊息(echo bot,可在 `index.js` 的 `buildReply()` 擴充自己的邏輯)
 - `GET /` 健康檢查端點
 
@@ -47,6 +48,41 @@ API 呼叫失敗也會自動 fallback,不會擋住回覆。
 
 兩種供應商都用結構化輸出(JSON schema)保證回傳合法的意圖 JSON,解析品質相近;
 Gemini 的免費額度對個人 Bot 的訊息量通常已足夠。
+
+## 📅 Google Calendar 每日行程提醒
+
+設定完成後,Bot 每天固定時間(預設台北時間 08:00)會把當天的 Google Calendar
+行程推播到指定的聊天(個人或群組),也可以隨時輸入指令查詢:
+
+| 指令 | 說明 |
+|------|------|
+| `行程` / `今日行程` | 查看今天的行程 |
+| `id` | 查詢目前聊天的 LINE ID(設定推播對象用) |
+
+### 設定步驟
+
+1. **建立服務帳戶**
+   1. 到 [Google Cloud Console](https://console.cloud.google.com/) 建立專案(或用現有的)
+   2. 啟用 **Google Calendar API**(APIs & Services → Enable APIs)
+   3. 到 **IAM & Admin → Service Accounts** 建立服務帳戶(不用給任何專案角色)
+   4. 進入服務帳戶 → **Keys → Add Key → JSON**,下載金鑰檔
+2. **把行事曆分享給服務帳戶**
+   - 打開 [Google Calendar](https://calendar.google.com/) → 行事曆設定 →「與特定使用者共用」
+   - 加入服務帳戶的 email(金鑰 JSON 裡的 `client_email`,長得像
+     `xxx@專案名.iam.gserviceaccount.com`),權限選「查看所有活動詳細資訊」即可
+3. **取得推播對象 ID**
+   - 部署後對 Bot(或在群組裡)輸入 `id`,Bot 會回覆這個聊天的 LINE ID
+4. **設定環境變數**(Railway → Variables)
+
+   | 環境變數 | 說明 |
+   |----------|------|
+   | `GOOGLE_SERVICE_ACCOUNT_KEY` | 服務帳戶金鑰 JSON。建議轉成 base64 再貼(`base64 -w0 key.json`),原始 JSON 也可以 |
+   | `GOOGLE_CALENDAR_ID` | 行事曆 ID,個人主行事曆就是你的 Gmail 地址 |
+   | `REMINDER_TO` | 推播對象的 LINE ID(第 3 步查到的值)。沒設定就只能手動查詢,不會每日推播 |
+   | `REMINDER_TIME` | 每天推播時間 `HH:mm`,預設 `08:00` |
+   | `REMINDER_TZ` | 時區,預設 `Asia/Taipei` |
+
+注意:LINE 的 push message 有免費額度(目前每月 200 則),每天一則提醒綽綽有餘。
 
 ### 💾 資料儲存
 
@@ -111,6 +147,8 @@ ngrok http 3000
 ```
 ├── index.js          # Express server + LINE webhook 處理
 ├── shoppingList.js   # 購物清單指令解析
+├── calendar.js       # Google Calendar 整合(服務帳戶,查詢今日行程)
+├── reminder.js       # 每日行程提醒排程(node-cron)
 ├── storage.js        # 儲存層:PostgreSQL(DATABASE_URL)或本機 JSON 檔 fallback
 ├── llmParser.js      # LLM 自由格式意圖解析(選用,支援 Claude / Gemini)
 ├── scripts/
