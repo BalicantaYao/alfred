@@ -43,7 +43,7 @@ API 呼叫失敗也會自動 fallback,不會擋住回覆。
 | `GEMINI_API_KEY` | 使用 Gemini([Google AI Studio](https://aistudio.google.com/) 取得,有免費額度) |
 | `LLM_PROVIDER` | 兩個 key 都設定時指定用哪個:`claude` 或 `gemini`(預設 claude) |
 | `ANTHROPIC_MODEL` | Claude 模型,預設 `claude-opus-4-8` |
-| `GEMINI_MODEL` | Gemini 模型,預設 `gemini-2.5-flash` |
+| `GEMINI_MODEL` | Gemini 模型,預設 `gemini-3.5-flash` |
 
 兩種供應商都用結構化輸出(JSON schema)保證回傳合法的意圖 JSON,解析品質相近;
 Gemini 的免費額度對個人 Bot 的訊息量通常已足夠。
