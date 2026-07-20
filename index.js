@@ -50,6 +50,10 @@ async function handleEvent(event) {
   const ownerId =
     event.source.groupId || event.source.roomId || event.source.userId;
   const replyText = await buildReply(userText, ownerId);
+  // 沒有比對到任何指令時不回覆,避免在群組裡對一般聊天訊息洗版
+  if (replyText === null) {
+    return;
+  }
 
   await client.replyMessage({
     replyToken: event.replyToken,
@@ -80,12 +84,12 @@ async function buildReply(text, ownerId) {
         return llmReply;
       }
     } catch (err) {
-      // API 失敗時不擋住回覆,fallback 到 echo
       console.error("LLM parse error:", err);
     }
   }
 
-  return `你說了:${text}`;
+  // 不是指令也解析不出意圖:不回覆
+  return null;
 }
 
 // 簽名驗證失敗時回 401,避免 middleware 錯誤直接變成 500
