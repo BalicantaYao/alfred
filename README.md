@@ -6,6 +6,7 @@
 
 - 接收 LINE Webhook 事件(含 X-Line-Signature 簽名驗證)
 - 🛒 **購物清單**:在聊天中管理待買事項,可依購買地點(蝦皮、家樂福⋯)分組
+- ⏰ **每日行事曆提醒**:訂閱後,在設定的時間推播今天與明天的 Google 日曆行程
 - 回覆文字訊息(echo bot,可在 `index.js` 的 `buildReply()` 擴充自己的邏輯)
 - `GET /` 健康檢查端點
 
@@ -61,6 +62,78 @@ Gemini 的免費額度對個人 Bot 的訊息量通常已足夠。
 (可用 `DATA_DIR` 改路徑),適合本機開發。注意:Railway 的檔案系統在**重新部署後會清空**,
 正式環境請使用 PostgreSQL。
 
+提醒訂閱存在同一層儲存(`reminder_subscriptions`;沒有資料庫時是 `data/reminders.json`)。
+每次推播還會寫一筆執行紀錄(`job_runs` / `data/job-runs.json`),用來避免重複送出。
+
+## 每日行事曆提醒
+
+Alfred 會在程序裡每 30 秒看一次訂閱。到了聊天室設定的時間(預設每天 08:00,時區預設 `Asia/Taipei`),
+就推播今天與明天的行程。沒有可報告的行程時不送訊息。
+
+每個聊天室可以設自己的時間,提醒跟 webhook 跑在同一個服務裡,不需要另外設 Railway cron。
+Postgres 的 `job_runs` 以「工作 + 聊天室 + 日期」當主鍵搶鎖:多個 replica、或送到一半重啟,
+同一天也只會送出一次。送給 LINE 時附上 retry key,即使送出後程序立刻掛掉,重試也不會再投遞同一則。
+JSON fallback 只適合單一行程的本機開發;正式環境請使用 `DATABASE_URL`。
+
+程序若在提醒時間當下沒有醒著,預設 3 小時內會補送(`REMINDER_CATCHUP_MINUTES`)。
+補送不跨過午夜。若你是在今天的提醒時間之後才訂閱、而且還在補送窗口內,會馬上補一則。
+
+所有訂閱的聊天室收到的是同一本日曆,也就是環境變數指定的那一本。
+
+### 指令
+
+| 指令 | 說明 |
+|------|------|
+| `訂閱提醒` | 訂閱每日行程推播,時間用 `REMINDER_DEFAULT_TIME`(預設 08:00) |
+| `訂閱提醒 08:20` | 訂閱並指定時間(24 小時制,可用全形冒號) |
+| `提醒時間 08:20` | 改時間;還沒訂閱的話會直接訂閱 |
+| `提醒狀態` | 查看這個聊天室的設定 |
+| `預覽提醒` | 立刻用回覆訊息看今天與明天的行程,不消耗 push 額度 |
+| `取消提醒` | 停止推播 |
+
+一對一聊天記在使用者身上;群組裡下指令則整個群組收到同一份提醒。標題以 `出遊：` 開頭的活動會略過(可用 `CALENDAR_SKIP_TITLE_PREFIX` 改)。自己已拒絕、已取消的活動也不列入。
+
+行程會標出兩件事:
+
+- 時間重疊:後面那場標 `⚠️`,並列出撞到的行程
+- 緊接上一場:間隔 0 分鐘標 `⚡ 緊接`,10 分鐘以內標間隔分鐘數
+
+全天活動只列出標題,不跟有時間的活動互相比衝突。
+
+### Google 日曆(唯讀)
+
+擇一即可。**建議用 service account**:OAuth 同意畫面若還在「Testing」,refresh token 7 天就會失效。
+
+1. 到 [Google Cloud Console](https://console.cloud.google.com/) 建立或選一個專案
+2. 啟用 **Google Calendar API**
+3. 建立 service account,新增一把 JSON 金鑰
+4. 打開 Google 日曆 → 目標日曆的「設定和共用」→「與特定使用者共用」,把 service account 的 `client_email` 加進去,權限選「查看所有活動詳情」
+5. 同一個設定頁的「整合日曆」複製**日曆 ID**(自己的主日曆通常就是 Gmail 地址)
+6. 金鑰轉成一行 base64,設到 Railway:
+
+   ```bash
+   # Linux
+   base64 -w 0 alfred-calendar.json
+   # macOS
+   base64 < alfred-calendar.json | tr -d '\n'
+   ```
+
+Service account 自己的 `primary` 日曆是空的,一定要設 `GOOGLE_CALENDAR_ID`,並完成上面的分享。多本日曆用逗號分隔。
+
+OAuth 替代做法:在 [OAuth Playground](https://developers.google.com/oauthplayground/) 用你自己的 OAuth client,授權 scope `https://www.googleapis.com/auth/calendar.readonly`,換到 refresh token 後填 `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET`、`GOOGLE_REFRESH_TOKEN`。這時 `GOOGLE_CALENDAR_ID` 可以是 `primary`。
+
+設定完成並重新部署後,先傳 `預覽提醒`。看得到行程再傳 `訂閱提醒`。若重新部署時已經過了今天的提醒時間、但還在補送窗口內,會補送一則;否則等明天。
+
+### LINE push 額度
+
+回覆訊息(包含 `預覽提醒`)不計入每月則數。排程用的是 push,會計入官方帳號方案的訊息則數。計價是收訊人數,不是 API 次數:一對一聊天每天 1 則,一個月大約 30 則;群組會乘上成員人數。沒有行程的日子不會推播,也不扣則數。
+
+額度用完時 LINE 會回 429,那天會在補送窗口內重試,仍失敗就等到明天。方案上限見 [Messaging API pricing](https://developers.line.biz/en/docs/messaging-api/pricing/),目前用量可在 LINE Official Account Manager 查看,或呼叫 `GET /v2/bot/message/quota`。
+
+### 之後加別的排程
+
+`scheduler.js` 只認識 `{ id, ready?, run }`。`run` 回傳要推播的文字,回傳 `null` 表示這次不送。把新的 job 放進 `startAlfred()` 的 `jobs` 陣列,再用 `setSubscription(ownerId, jobId, "HH:MM")` 寫入訂閱(或做一組新的指令)。搶鎖、補送、retry key 不用重寫。`jobId` 不要包含 `|`。
+
 ## 事前準備:建立 LINE Channel
 
 1. 到 [LINE Developers Console](https://developers.line.biz/console/) 登入
@@ -79,7 +152,9 @@ Gemini 的免費額度對個人 Bot 的訊息量通常已足夠。
    |------|-----|
    | `LINE_CHANNEL_SECRET` | LINE Channel secret |
    | `LINE_CHANNEL_ACCESS_TOKEN` | LINE Channel access token |
-   | `DATABASE_URL` | (建議)PostgreSQL 連線字串,設 `${{Postgres.DATABASE_URL}}` 引用同專案的資料庫服務 |
+   | `DATABASE_URL` | (建議)PostgreSQL 連線字串,設 `${{Postgres.DATABASE_URL}}` 引用同專案的資料庫服務。提醒訂閱與防重複送出也用這顆資料庫 |
+   | `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64` | (提醒功能)service account JSON 金鑰的 base64。見上方「Google 日曆」 |
+   | `GOOGLE_CALENDAR_ID` | (提醒功能)日曆 ID。service account 不要用 `primary` |
 
 3. 部署完成後,到 **Settings → Networking → Generate Domain** 產生公開網址,例如 `https://alfred-production.up.railway.app`
 4. 回到 LINE Developers Console 的「Messaging API」分頁:
@@ -95,6 +170,7 @@ Gemini 的免費額度對個人 Bot 的訊息量通常已足夠。
 ```bash
 npm install
 cp .env.example .env   # 填入你的 LINE 憑證
+npm test               # 單元測試 + 假日曆/假 LINE 的排程驗證 + 購物清單儲存驗證
 npm run dev
 ```
 
@@ -109,15 +185,23 @@ ngrok http 3000
 ## 專案結構
 
 ```
-├── index.js          # Express server + LINE webhook 處理
-├── shoppingList.js   # 購物清單指令解析
-├── storage.js        # 儲存層:PostgreSQL(DATABASE_URL)或本機 JSON 檔 fallback
-├── llmParser.js      # LLM 自由格式意圖解析(選用,支援 Claude / Gemini)
+├── index.js                 # Express server + LINE webhook + 啟動排程
+├── shoppingList.js          # 購物清單指令解析
+├── reminders.js             # 提醒訂閱指令
+├── scheduler.js             # 程序內排程、補送窗口、防重複送出
+├── calendar.js              # Google Calendar 唯讀(service account 或 OAuth)
+├── digest.js                # 行程摘要排版(衝突、緊接、略過出遊)
+├── time.js                  # Asia/Taipei 時間換算
+├── storage.js               # 儲存層:PostgreSQL(DATABASE_URL)或本機 JSON 檔 fallback
+├── llmParser.js             # LLM 自由格式意圖解析(選用,支援 Claude / Gemini)
+├── jobs/calendarDigest.js   # 每日行事曆這一個排程工作
 ├── scripts/
-│   └── verify-db.js  # 儲存層手動驗證腳本
+│   ├── verify-db.js         # 購物清單儲存層手動驗證
+│   └── verify-reminders.js  # 用假日曆與假 LINE push 跑一次排程
+├── test/                    # node --test
 ├── package.json
-├── railway.json      # Railway 部署設定
-├── .env.example      # 環境變數範本
+├── railway.json             # Railway 部署設定
+├── .env.example             # 環境變數範本
 └── README.md
 ```
 
@@ -126,7 +210,7 @@ ngrok http 3000
 編輯 `index.js` 裡的 `buildReply()`:
 
 ```js
-function buildReply(text) {
+async function buildReply(text, ownerId) {
   if (text === "天氣") return "今天天氣不錯 ☀️";
   return null; // 回傳 null 表示不回覆
 }

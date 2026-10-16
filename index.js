@@ -1,3 +1,5 @@
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import express from "express";
 import * as line from "@line/bot-sdk";
 import {
@@ -8,10 +10,9 @@ import {
   SHOPPING_HELP,
 } from "./shoppingList.js";
 import { llmEnabled, parseShoppingIntent } from "./llmParser.js";
-
-// DATABASE_URL 有設但連不上時直接讓程序失敗,交給 Railway restart,
-// 避免默默 fallback 到 ephemeral 檔案系統造成資料無聲流失
-await loadLists();
+import { handleReminderCommand, loadReminders, REMINDER_HELP, remindersSchedulerEnabled } from "./reminders.js";
+import { startScheduler } from "./scheduler.js";
+import { calendarDigestJob } from "./jobs/calendarDigest.js";
 
 const config = {
   channelSecret: process.env.LINE_CHANNEL_SECRET,
@@ -61,15 +62,18 @@ async function handleEvent(event) {
   });
 }
 
-async function buildReply(text, ownerId) {
+export async function buildReply(text, ownerId) {
   if (text === "help" || text === "幫助") {
     const llmNote = llmEnabled()
       ? "\n\n也可以直接用自然語言,例如:\n「幫我記一下要去蝦皮買行動電源跟手機殼」\n「牛奶買到了」"
       : "";
-    return `我是 Alfred 🤖\n\n${SHOPPING_HELP}${llmNote}`;
+    return `我是 Alfred 🤖\n\n${SHOPPING_HELP}\n\n${REMINDER_HELP}${llmNote}`;
   }
 
-  // 1. 精確指令(免費、零延遲)
+  // 1. 精確指令(免費、零延遲)。提醒先於購物清單,避免指令被誤判
+  const reminderReply = await handleReminderCommand(ownerId, text);
+  if (reminderReply !== null) return reminderReply;
+
   const shoppingReply = handleShoppingCommand(ownerId, text);
   if (shoppingReply !== null) {
     return shoppingReply;
@@ -105,7 +109,35 @@ app.use((err, req, res, next) => {
   next(err);
 });
 
-const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Alfred LINE Bot listening on port ${port}`);
-});
+export function startAlfred() {
+  // 程序內每 30 秒看一次訂閱。同一天的推播用 job_runs 搶鎖,
+  // 多個 replica 或重啟也不會重複送到同一個聊天室。
+  if (remindersSchedulerEnabled()) {
+    startScheduler({
+      jobs: [calendarDigestJob],
+      push: async (to, text, { retryKey } = {}) => {
+        await client.pushMessage({ to, messages: [{ type: "text", text }] }, retryKey);
+      },
+    });
+    console.log("Reminder scheduler started");
+  }
+
+  const port = process.env.PORT || 3000;
+  return app.listen(port, () => {
+    console.log(`Alfred LINE Bot listening on port ${port}`);
+  });
+}
+
+function isDirectRun() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  return import.meta.url === pathToFileURL(path.resolve(entry)).href;
+}
+
+// DATABASE_URL 有設但連不上時直接讓程序失敗,交給 Railway restart,
+// 避免默默 fallback 到 ephemeral 檔案系統造成資料無聲流失
+if (isDirectRun()) {
+  await loadLists();
+  await loadReminders();
+  startAlfred();
+}
