@@ -18,6 +18,13 @@ import {
   notifyToken,
   NOTIFY_HELP,
 } from "./notify.js";
+import {
+  assistantHelpSuffix,
+  assistantWebhookUrl,
+  commandTextFor,
+  maybeForwardToAssistant,
+  warmBotUserId,
+} from "./assistant.js";
 
 // DATABASE_URL 有設但連不上時直接讓程序失敗,交給 Railway restart,
 // 避免默默 fallback 到 ephemeral 檔案系統造成資料無聲流失
@@ -26,6 +33,17 @@ await initNotifyStorage();
 
 if (!notifyToken()) {
   console.log("NOTIFY_TOKEN 未設定,POST /notify 已關閉");
+}
+
+if (assistantWebhookUrl()) {
+  console.log("助理轉發已啟用");
+} else if (
+  typeof process.env.ASSISTANT_WEBHOOK_URL === "string" &&
+  process.env.ASSISTANT_WEBHOOK_URL.trim()
+) {
+  console.log("ASSISTANT_WEBHOOK_URL 不是可用的 https 網址,助理轉發已關閉");
+} else {
+  console.log("ASSISTANT_WEBHOOK_URL 未設定,助理轉發已關閉");
 }
 
 const client = new line.messagingApi.MessagingApiClient({
@@ -78,21 +96,28 @@ async function handleEvent(event, lineClient) {
   if (event.type !== "message" || event.message.type !== "text") {
     return;
   }
+  if (typeof event.message?.text !== "string") return;
 
-  const userText = event.message.text.trim();
+  const source = event.source || {};
   // 群組/聊天室共用一份清單,一對一聊天則是個人清單
-  const ownerId =
-    event.source.groupId || event.source.roomId || event.source.userId;
-  const replyText = await buildReply(userText, ownerId, event.source);
-  // 沒有比對到任何指令時不回覆,避免在群組裡對一般聊天訊息洗版
-  if (replyText === null) {
+  const ownerId = source.groupId || source.roomId || source.userId;
+  // 有點名時用拿掉標記後的文字,購物清單和轉發指令仍優先,不會轉給助理
+  const commandText = commandTextFor(event);
+  const replyText = await buildReply(commandText, ownerId, source);
+  if (replyText !== null) {
+    await lineClient.replyMessage({
+      replyToken: event.replyToken,
+      messages: [{ type: "text", text: replyText }],
+    });
     return;
   }
 
-  await lineClient.replyMessage({
-    replyToken: event.replyToken,
-    messages: [{ type: "text", text: replyText }],
-  });
+  // 沒有比對到指令:群組閒聊不轉發。點名或主人一對一才交給助理。
+  try {
+    await maybeForwardToAssistant(event, lineClient);
+  } catch (err) {
+    console.error(`assistant handler failed name=${err?.name || "Error"}`);
+  }
 }
 
 export async function buildReply(text, ownerId, source = {}) {
@@ -100,7 +125,7 @@ export async function buildReply(text, ownerId, source = {}) {
     const llmNote = llmEnabled()
       ? "\n\n也可以直接用自然語言,例如:\n「幫我記一下要去蝦皮買行動電源跟手機殼」\n「牛奶買到了」"
       : "";
-    return `我是 Alfred 🤖\n\n${SHOPPING_HELP}${llmNote}\n\n${NOTIFY_HELP}`;
+    return `我是 Alfred 🤖\n\n${SHOPPING_HELP}${llmNote}\n\n${NOTIFY_HELP}${assistantHelpSuffix()}`;
   }
 
   // 轉發指令先處理,避免被 LLM 當成購物意圖
@@ -139,6 +164,7 @@ function isMainModule() {
 }
 
 if (isMainModule()) {
+  void warmBotUserId(client);
   const port = process.env.PORT || 3000;
   const server = app.listen(port, () => {
     const bound = server.address();
