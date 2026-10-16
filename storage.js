@@ -95,9 +95,97 @@ export function persist(ownerId, lists) {
   );
 }
 
+// 轉發對象跟購物清單分開存,避免動到 shopping_lists 的格式。
+// 有 DATABASE_URL 時是 notify_targets 的單一列,否則是 data/notify-target.json。
+const notifyFile = path.join(dataDir, "notify-target.json");
+const NOTIFY_ROW_ID = "default";
+
+let notifyTargetId = null;
+let notifyWrite = Promise.resolve();
+
+function readNotifyFile() {
+  try {
+    const data = JSON.parse(fs.readFileSync(notifyFile, "utf8"));
+    return typeof data?.targetId === "string" && data.targetId ? data.targetId : null;
+  } catch {
+    return null;
+  }
+}
+
+function enqueueNotifyWrite(task) {
+  notifyWrite = notifyWrite
+    .then(task)
+    .catch((err) => console.error("DB persist error:", err));
+}
+
+function persistNotify() {
+  const snapshot = notifyTargetId;
+  if (!usePg) {
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(notifyFile, JSON.stringify({ targetId: snapshot }, null, 2));
+    return;
+  }
+
+  enqueueNotifyWrite(() =>
+    snapshot == null
+      ? pool.query("DELETE FROM notify_targets WHERE id = $1", [NOTIFY_ROW_ID])
+      : pool.query(
+          `INSERT INTO notify_targets (id, target_id, updated_at)
+           VALUES ($1, $2, now())
+           ON CONFLICT (id)
+           DO UPDATE SET target_id = EXCLUDED.target_id, updated_at = now()`,
+          [NOTIFY_ROW_ID, snapshot]
+        )
+  );
+}
+
+// initStorage 之後呼叫。檔案模式直接讀 JSON;Postgres 模式建表後載入那一列。
+export async function initNotifyStorage() {
+  if (!usePg) {
+    notifyTargetId = readNotifyFile();
+    return notifyTargetId;
+  }
+  if (!pool) {
+    throw new Error("initNotifyStorage requires initStorage");
+  }
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notify_targets (
+      id         TEXT PRIMARY KEY,
+      target_id  TEXT NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+
+  const { rows } = await pool.query(
+    "SELECT target_id FROM notify_targets WHERE id = $1",
+    [NOTIFY_ROW_ID]
+  );
+  const value = rows[0]?.target_id;
+  notifyTargetId = typeof value === "string" && value ? value : null;
+  return notifyTargetId;
+}
+
+export function getNotifyTarget() {
+  return notifyTargetId;
+}
+
+export function setNotifyTarget(targetId) {
+  if (typeof targetId !== "string" || targetId.length === 0) {
+    throw new Error("invalid notify target");
+  }
+  notifyTargetId = targetId;
+  persistNotify();
+}
+
+export function clearNotifyTarget() {
+  notifyTargetId = null;
+  persistNotify();
+}
+
 // 等待所有排隊中的寫入完成(驗證腳本用)
 export async function flushWrites() {
-  await Promise.all([...writeChains.values()]);
+  await Promise.all([...writeChains.values(), notifyWrite]);
 }
 
 export async function closeStorage() {
