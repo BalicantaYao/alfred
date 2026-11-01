@@ -5,68 +5,14 @@
 ## 功能
 
 - 接收 LINE Webhook 事件(含 X-Line-Signature 簽名驗證)
-- 🛒 **購物清單**:在聊天中管理待買事項,可依購買地點(蝦皮、家樂福⋯)分組
 - 🔔 **提醒轉發**:外部助理 `POST /notify`,Alfred 把同一段文字推到主人的 LINE 聊天
 - 🧠 **問助理**:群組裡點名 Alfred,或主人一對一傳來的非指令訊息,轉給外部助理;助理再用 `/notify` 把答案推回來
 - 群組裡沒被點名、也不是指令的訊息不回覆,避免洗版
 - `GET /` 健康檢查端點
 
-## 購物清單指令
-
-| 指令 | 說明 |
-|------|------|
-| `買 牛奶 @家樂福` | 新增待買項目,`@` 後面是要去買的地方(可省略,會歸到「未分類」) |
-| `加 電池` | 同「買」 |
-| `清單` | 查看購物清單,依地點分組並編號 |
-| `買到 2` | 買到了,刪除第 2 項(可一次多個:`買到 1 3`,也可用「刪除」) |
-| `清空清單` | 刪除全部項目 |
-| `help` / `幫助` | 顯示指令說明 |
-
-一對一聊天是個人清單;把 Bot 加進群組的話,整個群組共用一份清單。
-
-### 🧠 自由格式輸入(選用,支援 Claude 或 Gemini)
-
-設定 `ANTHROPIC_API_KEY` 或 `GEMINI_API_KEY` 其中一個環境變數後,不用記指令格式,直接用自然語言也可以:
-
-- 「幫我記一下要去蝦皮買行動電源跟手機殼」→ 自動拆成兩個項目加入蝦皮分類
-- 「家樂福要買牛奶,另外記得買電池」→ 牛奶歸家樂福,電池歸未分類
-- 「牛奶買到了」→ 從清單刪除牛奶(簡稱也能對應,例如「電源」會對到「行動電源」)
-- 「我要買什麼?」→ 顯示清單
-
-運作方式:訊息先走精確指令(免 API 費用、零延遲),不是指令才交給 LLM
-解析成結構化意圖再套用到清單。購物清單、轉發指令和 help 都比「問助理」優先,
-比對到就只在 Alfred 裡處理,不會轉出去。與購物無關、也不是轉發指令的訊息,
-在沒啟用問助理時不會回覆。API 呼叫失敗也會自動 fallback,不會擋住回覆。
-
-**供應商設定:**
-
-| 環境變數 | 說明 |
-|----------|------|
-| `ANTHROPIC_API_KEY` | 使用 Claude([platform.claude.com](https://platform.claude.com/) 取得,需儲值) |
-| `GEMINI_API_KEY` | 使用 Gemini([Google AI Studio](https://aistudio.google.com/) 取得,有免費額度) |
-| `LLM_PROVIDER` | 兩個 key 都設定時指定用哪個:`claude` 或 `gemini`(預設 claude) |
-| `ANTHROPIC_MODEL` | Claude 模型,預設 `claude-opus-4-8` |
-| `GEMINI_MODEL` | Gemini 模型,預設 `gemini-3.5-flash` |
-
-兩種供應商都用結構化輸出(JSON schema)保證回傳合法的意圖 JSON,解析品質相近;
-Gemini 的免費額度對個人 Bot 的訊息量通常已足夠。
-
-### 💾 資料儲存
-
-設定 `DATABASE_URL` 環境變數後,清單資料存在 PostgreSQL。在 Railway 上:
-
-1. 專案裡按 **Create → Database → Add PostgreSQL** 新增資料庫服務
-2. 在 Bot 服務的 **Variables** 加上 `DATABASE_URL = ${{Postgres.DATABASE_URL}}`
-
-首次啟動會自動建表;如果資料庫是空的且存在舊的 `data/shopping-lists.json`,會自動匯入。
-
-沒設定 `DATABASE_URL` 時,fallback 存在本機 JSON 檔 `data/shopping-lists.json`
-(可用 `DATA_DIR` 改路徑),適合本機開發。注意:Railway 的檔案系統在**重新部署後會清空**,
-正式環境請使用 PostgreSQL。
-
 ## 提醒轉發
 
-個人助理(跑在別的地方)可以把日曆提醒、週末出遊建議等文字 POST 給 Alfred,Alfred 再用 LINE push 送到主人的聊天。購物清單的指令與儲存方式不變。
+個人助理(跑在別的地方)可以把日曆提醒、週末出遊建議等文字 POST 給 Alfred,Alfred 再用 LINE push 送到主人的聊天。
 
 這不是 LINE Webhook,不要把 `/notify` 填進 Webhook URL。
 
@@ -80,7 +26,7 @@ Gemini 的免費額度對個人 Bot 的訊息量通常已足夠。
 
 三個都沒有時回 `422`,不會亂推。`to` 只影響這一次,不會改掉訂閱。
 
-`訂閱轉發` 跟購物清單走同一層儲存:有 `DATABASE_URL` 時寫進 `notify_targets`,否則寫進 `data/notify-target.json`。
+`訂閱轉發` 記住的對象:有 `DATABASE_URL` 時寫進 `notify_targets`,否則寫進 `data/notify-target.json`。
 
 | 指令 | 說明 |
 |------|------|
@@ -88,7 +34,7 @@ Gemini 的免費額度對個人 Bot 的訊息量通常已足夠。
 | `訂閱轉發` | 把這個聊天設成預設推送對象(再訂閱別的聊天會蓋過) |
 | `取消轉發` | 取消這個聊天的訂閱。`NOTIFY_LINE_TO` 若有設,仍會推到那裡 |
 | `轉發狀態` | 查看目前預設推到哪裡 |
-| `help` / `幫助` | 購物清單指令和轉發指令一起顯示 |
+| `help` / `幫助` | 顯示轉發指令;有啟用問助理時一併顯示問助理說明 |
 
 一對一聊天推給使用者;在群組裡訂閱則推給整個群組(用的是群組 ID,不是發言者的 ID)。
 
@@ -134,18 +80,27 @@ LINE 單則文字上限 5000 字,一次 push 最多 5 則。較長的內容會�
 
 Push 會計入 LINE 官方帳號的訊息則數。回覆「我的ID」這類指令不算 push。
 
+### 💾 資料儲存
+
+設定 `DATABASE_URL` 後,轉發對象存在 PostgreSQL 的 `notify_targets`。在 Railway 上:
+
+1. 專案裡按 **Create → Database → Add PostgreSQL** 新增資料庫服務
+2. 在 Bot 服務的 **Variables** 加上 `DATABASE_URL = ${{Postgres.DATABASE_URL}}`
+
+首次啟動會自動建立 `notify_targets`(若還沒有)。沒設定 `DATABASE_URL` 時,fallback 存在本機 JSON 檔 `data/notify-target.json`(可用 `DATA_DIR` 改目錄),適合本機開發。注意:Railway 的檔案系統在**重新部署後會清空**,正式環境請使用 PostgreSQL。
+
 ## 問助理
 
-有設定 `ASSISTANT_WEBHOOK_URL` 時,Alfred 會把「講給 Alfred 聽」的訊息用 HTTPS POST 轉給外部助理。助理想好之後,用上面的 `POST /notify` 把答案推回同一個聊天(`to` 用轉發 body 裡的 `replyTo`)。購物清單、`訂閱轉發` 這類指令和 `help` 仍在 Alfred 裡處理,不會轉出去。
+有設定 `ASSISTANT_WEBHOOK_URL` 時,Alfred 會把「講給 Alfred 聽」的訊息用 HTTPS POST 轉給外部助理。助理想好之後,用上面的 `POST /notify` 把答案推回同一個聊天(`to` 用轉發 body 裡的 `replyTo`)。`訂閱轉發` 這類指令和 `help` 仍在 Alfred 裡處理,不會轉出去。
 
 會轉發的訊息:
 
 - **群組或聊天室**:LINE webhook 的 `message.mention.mentionees` 裡有 `isSelf: true`,或 `userId` 等於 Bot 自己的 ID。沒有標記資料時,文字以 `alfred` 或 `@alfred` 開頭(大小寫不拘,全形 `＠` 也可以)也算。
 - **一對一**:主人傳來、而且不是上面那些指令的文字。主人是 `NOTIFY_OWNER_ID`;沒設的話,任何一對一都當成主人。
 
-不會轉發:群組裡沒點名的閒聊、允許清單以外的人、`http://` 網址、購物清單指令(含 `@Alfred 清單` 這種點名後的指令)。
+不會轉發:群組裡沒點名的閒聊、允許清單以外的人、`http://` 網址、轉發指令與 `help`(含 `@Alfred 訂閱轉發` 這種點名後的指令)。
 
-點名後如果剩下的文字是指令(例如 `@Alfred 清單`、`alfred 買 牛奶`),Alfred 照指令回覆,不轉發。
+點名後如果剩下的文字是指令(例如 `@Alfred 訂閱轉發`、`alfred help`),Alfred 照指令回覆,不轉發。其餘點名或主人一對一的文字會轉給助理。
 
 助理 webhook 應盡快回 **2xx**,不要等模型跑完。Alfred 等到 2xx 才用 reply token(不計 push 則數)回一句 `收到，我想一下 🤔`。逾時、連線失敗或非 2xx 則改回 `助理暫時連不上，請稍後再試`,一樣用 reply token,程序不會因此崩潰。確認句可用環境變數改字或關掉;關掉之後,成功時不回覆,失敗仍會回錯誤句。真正的答案之後由助理呼叫 `/notify` 推回來,那一次才計入 push 則數。
 
@@ -260,7 +215,7 @@ Push 會計入 LINE 官方帳號的訊息則數。回覆「我的ID」這類指�
 npm install
 cp .env.example .env   # 填入你的 LINE 憑證
 npm run dev
-npm test               # 轉發端點、問助理(假的 fetch / LINE)與購物清單儲存層
+npm test               # 轉發端點、問助理(假的 fetch / LINE)與轉發對象儲存
 ```
 
 本機測試 Webhook 需要公開網址,可以用 [ngrok](https://ngrok.com/):
@@ -277,11 +232,9 @@ ngrok http 3000
 ├── index.js          # Express server + LINE webhook 處理
 ├── notify.js         # POST /notify、轉發指令、長文拆則
 ├── assistant.js      # 點名 / 主人一對一轉給外部助理
-├── shoppingList.js   # 購物清單指令解析
-├── storage.js        # 儲存層:PostgreSQL(DATABASE_URL)或本機 JSON 檔 fallback
-├── llmParser.js      # LLM 自由格式意圖解析(選用,支援 Claude / Gemini)
+├── storage.js        # 轉發對象:PostgreSQL(DATABASE_URL)或本機 JSON 檔 fallback
 ├── scripts/
-│   ├── verify-db.js         # 購物清單儲存層驗證
+│   ├── verify-db.js         # 轉發對象儲存層驗證
 │   ├── verify-notify.js     # 轉發端點驗證(假的 LINE client)
 │   └── verify-assistant.js  # 問助理驗證(假的 fetch / LINE)
 ├── package.json
@@ -295,9 +248,9 @@ ngrok http 3000
 編輯 `index.js` 裡的 `buildReply()`:
 
 ```js
-function buildReply(text) {
+function buildReply(text, source) {
   if (text === "天氣") return "今天天氣不錯 ☀️";
-  return null; // 回傳 null 表示不回覆
+  return null; // 回傳 null 表示不在這裡回覆,交給問助理的規則決定要不要轉發
 }
 ```
 

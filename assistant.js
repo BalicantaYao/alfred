@@ -168,7 +168,7 @@ export function assistantHelpSuffix() {
   return (
     "\n\n🧠 問助理:\n" +
     "- 群組或聊天室:標記我,或傳以 Alfred / @Alfred 開頭的話\n" +
-    "- 一對一:直接傳,不用標記(購物清單、轉發指令和 help 仍照常處理)\n" +
+    "- 一對一:直接傳,不用標記(轉發指令和 help 仍照常處理)\n" +
     "我會先回覆一句,答案稍後送到這個聊天。"
   );
 }

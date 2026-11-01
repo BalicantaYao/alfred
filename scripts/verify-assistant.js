@@ -1,4 +1,4 @@
-// 驗證問助理:點名與前綴、允許清單、假的 fetch / LINE、購物指令優先。
+// 驗證問助理:點名與前綴、允許清單、假的 fetch / LINE、指令優先。
 //   node scripts/verify-assistant.js
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
@@ -35,9 +35,6 @@ for (const key of [
   "NOTIFY_LINE_TO",
   "NOTIFY_TOKEN",
   "DATABASE_URL",
-  "ANTHROPIC_API_KEY",
-  "GEMINI_API_KEY",
-  "LLM_PROVIDER",
 ]) {
   delete process.env[key];
 }
@@ -733,26 +730,33 @@ async function main() {
       assert.equal(profile.group, 0);
     });
 
-    await check("購物、轉發指令與 help 優先,點名後的指令也不轉發", async () => {
+    await check("轉發指令與 help 不轉發;點名或主人一對一的其他文字才轉發", async () => {
       resetCase();
       const listed = await postEvents(server, [
         event({
           text: "@Alfred 清單",
           replyToken: "reply-list",
+          messageId: "m-list",
           mention: selfMention("@Alfred 清單"),
         }),
       ]);
       assert.equal(listed.status, 200);
-      assert.equal(calls.length, 0);
-      assert.match(replies[0].messages[0].text, /購物清單是空的/);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].body.text, "清單");
+      assert.equal(replies[0].messages[0].text, assistant.DEFAULT_ACK_TEXT);
 
       resetCase();
       const added = await postEvents(server, [
-        event({ text: "alfred 買 牛奶 @家樂福", replyToken: "reply-add" }),
+        event({
+          text: "alfred 買 牛奶 @家樂福",
+          replyToken: "reply-add",
+          messageId: "m-add",
+        }),
       ]);
       assert.equal(added.status, 200);
-      assert.equal(calls.length, 0);
-      assert.match(replies[0].messages[0].text, /^已加入:牛奶\(家樂福\)/);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].body.text, "買 牛奶 @家樂福");
+      assert.equal(replies[0].messages[0].text, assistant.DEFAULT_ACK_TEXT);
 
       resetCase();
       const plain = await postEvents(server, [
@@ -760,19 +764,22 @@ async function main() {
       ]);
       assert.equal(plain.status, 200);
       assert.equal(calls.length, 0);
-      assert.match(replies[0].messages[0].text, /^已加入:電池/);
+      assert.equal(replies.length, 0);
 
       resetCase();
       const directAdd = await postEvents(server, [
         event({
           text: "買 雞蛋",
           replyToken: "reply-egg",
+          messageId: "m-egg",
           source: { type: "user", userId: USER },
         }),
       ]);
       assert.equal(directAdd.status, 200);
-      assert.equal(calls.length, 0);
-      assert.match(replies[0].messages[0].text, /^已加入:雞蛋/);
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].body.text, "買 雞蛋");
+      assert.equal(calls[0].body.replyTo, USER);
+      assert.equal(replies[0].messages[0].text, assistant.DEFAULT_ACK_TEXT);
 
       resetCase();
       const subscribed = await postEvents(server, [
@@ -797,7 +804,8 @@ async function main() {
       assert.equal(helped.status, 200);
       assert.equal(calls.length, 0);
       assert.match(replies[0].messages[0].text, /問助理/);
-      assert.equal(await index.buildReply(`明天 ${PHRASE}`, USER, { userId: USER }), null);
+      assert.equal(replies[0].messages[0].text.includes("購物"), false);
+      assert.equal(await index.buildReply(`明天 ${PHRASE}`, { userId: USER }), null);
     });
 
     await check("主人一對一才轉發,允許清單擋下來時不回確認", async () => {
@@ -990,12 +998,14 @@ async function main() {
         }),
       ]);
       assert.equal(mixed.status, 200);
-      assert.equal(calls.length, 1);
-      assert.equal(calls[0].body.text, "同時");
-      assert.equal(calls[0].body.messageId, "m-both");
+      assert.equal(calls.length, 2);
+      const byId = Object.fromEntries(calls.map((call) => [call.body.messageId, call.body]));
+      assert.equal(byId["m-apple"].text, "買 蘋果");
+      assert.equal(byId["m-apple"].replyTo, USER);
+      assert.equal(byId["m-both"].text, "同時");
+      assert.equal(byId["m-both"].replyTo, GROUP);
       assert.equal(replies.length, 2);
-      assert.ok(replies.some((reply) => /已加入:蘋果/.test(reply.messages[0].text)));
-      assert.ok(replies.some((reply) => reply.messages[0].text === assistant.DEFAULT_ACK_TEXT));
+      assert.ok(replies.every((reply) => reply.messages[0].text === assistant.DEFAULT_ACK_TEXT));
       assert.equal(pushes.length, 0);
     });
 
