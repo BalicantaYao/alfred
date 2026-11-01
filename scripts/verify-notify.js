@@ -23,9 +23,6 @@ const RETRY_B = "123e4567-e89b-12d3-a456-426614174001";
 
 process.env.DATA_DIR = tmp;
 delete process.env.DATABASE_URL;
-delete process.env.ANTHROPIC_API_KEY;
-delete process.env.GEMINI_API_KEY;
-delete process.env.LLM_PROVIDER;
 delete process.env.NOTIFY_LINE_TO;
 delete process.env.NOTIFY_OWNER_ID;
 process.env.LINE_CHANNEL_SECRET = "test-channel-secret";
@@ -34,7 +31,6 @@ process.env.NOTIFY_TOKEN = TOKEN;
 
 const index = await import("../index.js");
 const notify = await import("../notify.js");
-const shopping = await import("../shoppingList.js");
 const storage = await import("../storage.js");
 
 let passed = 0;
@@ -193,50 +189,39 @@ async function main() {
     assert.equal(overflow.maxChars, notify.NOTIFY_MAX_CHARS);
   });
 
-  await check("轉發指令不會被購物清單吃掉,購物回覆也不會被包一層", async () => {
+  await check("轉發指令會回覆,其他文字不是指令", async () => {
     resetRelay();
     for (const command of ["訂閱轉發", "取消轉發", "轉發狀態", "我的ID"]) {
-      assert.equal(shopping.handleShoppingCommand(USER, command), null);
       assert.notEqual(notify.handleNotifyCommand(command, { userId: USER }), null);
+      assert.notEqual(await index.buildReply(command, { userId: USER }), null);
     }
-    assert.equal(notify.handleNotifyCommand("買 牛奶", { userId: USER }), null);
-    assert.equal(notify.handleNotifyCommand("清單", { userId: USER }), null);
+    for (const text of ["買 牛奶", "清單", "買到 1", "清空清單", "今天天氣真好"]) {
+      assert.equal(notify.handleNotifyCommand(text, { userId: USER }), null);
+      assert.equal(await index.buildReply(text, { userId: USER }), null);
+    }
 
-    const direct = shopping.handleShoppingCommand("owner-a", "買 牛奶 @家樂福");
-    const via = await index.buildReply("買 牛奶 @家樂福", "owner-b", { userId: "owner-b" });
-    assert.equal(via, direct);
-    assert.match(via, /^已加入:牛奶\(家樂福\)/);
-
-    const listed = shopping.handleShoppingCommand("owner-a", "清單");
-    const listedVia = await index.buildReply("清單", "owner-b", { userId: "owner-b" });
-    assert.equal(listedVia, listed);
-
-    shopping.handleShoppingCommand("owner-a", "清空清單");
-    const cleared = await index.buildReply("清空清單", "owner-b", { userId: "owner-b" });
-    assert.equal(cleared, "購物清單已清空 🧹");
-    assert.equal(await index.buildReply("今天天氣真好", USER, { userId: USER }), null);
-
-    const help = await index.buildReply("幫助", USER, { userId: USER });
-    assert.ok(help.includes(shopping.SHOPPING_HELP));
+    const help = await index.buildReply("幫助", { userId: USER });
     assert.match(help, /訂閱轉發/);
+    assert.match(help, /我的ID/);
+    assert.equal(help.includes("購物"), false);
   });
 
   await check("訂閱記群組 ID,換聊天取消不會清掉,重載後還在", async () => {
     resetRelay();
-    const subscribed = await index.buildReply("訂閱轉發", GROUP, {
+    const subscribed = await index.buildReply("訂閱轉發", {
       groupId: GROUP,
       userId: USER,
     });
     assert.match(subscribed, new RegExp(GROUP));
     assert.equal(storage.getNotifyTarget(), GROUP);
-    assert.match(await index.buildReply("轉發狀態", GROUP, { groupId: GROUP, userId: USER }), /已訂閱:這個聊天/);
+    assert.match(await index.buildReply("轉發狀態", { groupId: GROUP, userId: USER }), /已訂閱:這個聊天/);
 
-    const idReply = await index.buildReply("我的ID", GROUP, { groupId: GROUP, userId: USER });
+    const idReply = await index.buildReply("我的ID", { groupId: GROUP, userId: USER });
     assert.match(idReply, new RegExp(`使用者 ID: ${USER}`));
     assert.match(idReply, new RegExp(`群組 ID: ${GROUP}`));
     assert.match(idReply, /轉發會送到: /);
 
-    const otherCancel = await index.buildReply("取消轉發", USER, { userId: USER });
+    const otherCancel = await index.buildReply("取消轉發", { userId: USER });
     assert.match(otherCancel, /不是轉發對象/);
     assert.equal(storage.getNotifyTarget(), GROUP);
 
@@ -251,15 +236,13 @@ async function main() {
     await storage.initNotifyStorage();
     assert.equal(storage.getNotifyTarget(), GROUP);
 
-    const lists = JSON.parse(fs.readFileSync(path.join(tmp, "shopping-lists.json"), "utf8"));
-    for (const value of Object.values(lists)) assert.ok(Array.isArray(value));
-    assert.equal(lists[GROUP], undefined);
+    assert.deepEqual(fs.readdirSync(tmp).sort(), ["notify-target.json"]);
 
-    const cancelled = await index.buildReply("取消轉發", GROUP, { groupId: GROUP, userId: USER });
+    const cancelled = await index.buildReply("取消轉發", { groupId: GROUP, userId: USER });
     assert.match(cancelled, /已取消轉發/);
     assert.equal(storage.getNotifyTarget(), null);
 
-    const room = await index.buildReply("訂閱轉發", ROOM, { roomId: ROOM, userId: USER });
+    const room = await index.buildReply("訂閱轉發", { roomId: ROOM, userId: USER });
     assert.match(room, new RegExp(ROOM));
     assert.equal(storage.getNotifyTarget(), ROOM);
     storage.clearNotifyTarget();
@@ -269,16 +252,16 @@ async function main() {
     resetRelay();
     process.env.NOTIFY_OWNER_ID = USER;
     storage.setNotifyTarget(ROOM);
-    const denied = await index.buildReply("訂閱轉發", GROUP, { groupId: GROUP, userId: OTHER });
+    const denied = await index.buildReply("訂閱轉發", { groupId: GROUP, userId: OTHER });
     assert.match(denied, /只有主人/);
     assert.equal(storage.getNotifyTarget(), ROOM);
-    const status = await index.buildReply("轉發狀態", GROUP, { groupId: GROUP, userId: OTHER });
+    const status = await index.buildReply("轉發狀態", { groupId: GROUP, userId: OTHER });
     assert.equal(status.includes(ROOM), false);
     assert.match(status, /不是轉發對象/);
-    const mine = await index.buildReply("我的id", OTHER, { userId: OTHER });
+    const mine = await index.buildReply("我的id", { userId: OTHER });
     assert.match(mine, new RegExp(OTHER));
 
-    const allowed = await index.buildReply("訂閱轉發", GROUP, { groupId: GROUP, userId: USER });
+    const allowed = await index.buildReply("訂閱轉發", { groupId: GROUP, userId: USER });
     assert.match(allowed, /已改為這個聊天/);
     assert.equal(storage.getNotifyTarget(), GROUP);
     resetRelay();
@@ -561,7 +544,7 @@ async function main() {
       };
     });
 
-    await check("webhook 仍驗簽名,簽過的購物指令照常回覆", async () => {
+    await check("webhook 仍驗簽名,轉發指令照常回覆,非指令在沒開助理時不回", async () => {
       const webhook = await post(server, {
         path: "/webhook",
         headers: { "content-type": "application/json" },
@@ -575,7 +558,7 @@ async function main() {
             type: "message",
             replyToken: "reply-1",
             source: { type: "user", userId: USER },
-            message: { type: "text", id: "1", text: "買 雞蛋" },
+            message: { type: "text", id: "1", text: "我的ID" },
           },
         ],
       });
@@ -591,7 +574,7 @@ async function main() {
       assert.equal(signed.status, 200);
       assert.equal(replies.length, before + 1);
       assert.equal(replies.at(-1).replyToken, "reply-1");
-      assert.match(replies.at(-1).messages[0].text, /^已加入:雞蛋/);
+      assert.match(replies.at(-1).messages[0].text, new RegExp(`使用者 ID: ${USER}`));
 
       const chat = JSON.stringify({
         events: [
@@ -600,6 +583,12 @@ async function main() {
             replyToken: "reply-2",
             source: { type: "user", userId: USER },
             message: { type: "text", id: "2", text: "今天天氣真好" },
+          },
+          {
+            type: "message",
+            replyToken: "reply-3",
+            source: { type: "user", userId: USER },
+            message: { type: "text", id: "3", text: "買 雞蛋" },
           },
         ],
       });
@@ -717,6 +706,7 @@ async function smokeProcess() {
     });
     assert.equal(webhook.status, 401);
     assert.match(out, /NOTIFY_TOKEN 未設定/);
+    assert.match(out, /助理轉發已關閉/);
     assert.equal(out.includes("should-not-send"), false);
     assert.equal(out.includes("super-secret-token"), false);
   } finally {

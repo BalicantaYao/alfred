@@ -2,14 +2,6 @@ import path from "path";
 import { pathToFileURL } from "url";
 import express from "express";
 import * as line from "@line/bot-sdk";
-import {
-  applyParsedIntent,
-  getItems,
-  handleShoppingCommand,
-  loadLists,
-  SHOPPING_HELP,
-} from "./shoppingList.js";
-import { llmEnabled, parseShoppingIntent } from "./llmParser.js";
 import { initNotifyStorage } from "./storage.js";
 import {
   handleNotifyBodyError,
@@ -28,7 +20,6 @@ import {
 
 // DATABASE_URL 有設但連不上時直接讓程序失敗,交給 Railway restart,
 // 避免默默 fallback 到 ephemeral 檔案系統造成資料無聲流失
-await loadLists();
 await initNotifyStorage();
 
 if (!notifyToken()) {
@@ -99,11 +90,9 @@ async function handleEvent(event, lineClient) {
   if (typeof event.message?.text !== "string") return;
 
   const source = event.source || {};
-  // 群組/聊天室共用一份清單,一對一聊天則是個人清單
-  const ownerId = source.groupId || source.roomId || source.userId;
-  // 有點名時用拿掉標記後的文字,購物清單和轉發指令仍優先,不會轉給助理
+  // 有點名時用拿掉標記後的文字,轉發指令和 help 仍優先,不會轉給助理
   const commandText = commandTextFor(event);
-  const replyText = await buildReply(commandText, ownerId, source);
+  const replyText = await buildReply(commandText, source);
   if (replyText !== null) {
     await lineClient.replyMessage({
       replyToken: event.replyToken,
@@ -120,38 +109,15 @@ async function handleEvent(event, lineClient) {
   }
 }
 
-export async function buildReply(text, ownerId, source = {}) {
+export async function buildReply(text, source = {}) {
   if (text === "help" || text === "幫助") {
-    const llmNote = llmEnabled()
-      ? "\n\n也可以直接用自然語言,例如:\n「幫我記一下要去蝦皮買行動電源跟手機殼」\n「牛奶買到了」"
-      : "";
-    return `我是 Alfred 🤖\n\n${SHOPPING_HELP}${llmNote}\n\n${NOTIFY_HELP}${assistantHelpSuffix()}`;
+    return `我是 Alfred 🤖\n\n${NOTIFY_HELP}${assistantHelpSuffix()}`;
   }
 
-  // 轉發指令先處理,避免被 LLM 當成購物意圖
   const notifyReply = handleNotifyCommand(text, source);
   if (notifyReply !== null) return notifyReply;
 
-  // 1. 精確指令(免費、零延遲)
-  const shoppingReply = handleShoppingCommand(ownerId, text);
-  if (shoppingReply !== null) {
-    return shoppingReply;
-  }
-
-  // 2. 自由格式:用 Claude 解析意圖後套用到清單
-  if (llmEnabled()) {
-    try {
-      const parsed = await parseShoppingIntent(text, getItems(ownerId));
-      const llmReply = applyParsedIntent(ownerId, parsed);
-      if (llmReply !== null) {
-        return llmReply;
-      }
-    } catch (err) {
-      console.error("LLM parse error:", err);
-    }
-  }
-
-  // 不是指令也解析不出意圖:不回覆
+  // 不是轉發指令:不在這裡回覆。點名或主人一對一由 handleEvent 轉給助理。
   return null;
 }
 

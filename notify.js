@@ -412,7 +412,7 @@ function statusReply(source) {
 
 const OWNER_ONLY = "只有主人可以變更轉發對象。";
 
-// 是轉發指令就回覆文字,否則 null,讓購物清單接著處理。
+// 是轉發指令就回覆文字,否則 null,讓呼叫端決定要不要轉給助理。
 export function handleNotifyCommand(text, source = {}) {
   const command = normalizeCommand(text);
   if (command === "我的ID" || command.toLowerCase() === "我的id") {

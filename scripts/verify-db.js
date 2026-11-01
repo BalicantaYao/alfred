@@ -1,39 +1,56 @@
-// 手動驗證腳本:走一遍新增/查看/刪除/清空,確認儲存層正常
-//   node scripts/verify-db.js                     — 完整流程(結束時清單為空)
-//   node scripts/verify-db.js --check-persisted X — 只載入後印出 owner X 的清單,
-//                                                   用來驗證跨 process 的持久化
-import assert from "node:assert";
-import { getItems, handleShoppingCommand, loadLists } from "../shoppingList.js";
-import { closeStorage, flushWrites } from "../storage.js";
+// 驗證轉發對象儲存(JSON 模式):寫入、重載、清除。不連資料庫。
+//   node scripts/verify-db.js
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-await loadLists();
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "alfred-db-"));
+process.env.DATA_DIR = tmp;
+delete process.env.DATABASE_URL;
 
-const checkIdx = process.argv.indexOf("--check-persisted");
-if (checkIdx !== -1) {
-  const owner = process.argv[checkIdx + 1];
-  if (!owner) {
-    console.error("Usage: node scripts/verify-db.js --check-persisted <ownerId>");
-    process.exit(1);
-  }
-  console.log(JSON.stringify(getItems(owner), null, 2));
-  await closeStorage();
-  process.exit(0);
+const storage = await import("../storage.js");
+
+const USER = "U" + "ab".repeat(16);
+const OTHER = "U" + "12".repeat(16);
+const notifyFile = path.join(tmp, "notify-target.json");
+
+try {
+  assert.equal(await storage.initNotifyStorage(), null);
+  assert.equal(storage.getNotifyTarget(), null);
+  assert.equal(fs.existsSync(notifyFile), false);
+
+  storage.setNotifyTarget(USER);
+  await storage.flushWrites();
+  assert.equal(storage.getNotifyTarget(), USER);
+  assert.equal(JSON.parse(fs.readFileSync(notifyFile, "utf8")).targetId, USER);
+  assert.deepEqual(fs.readdirSync(tmp).sort(), ["notify-target.json"]);
+
+  fs.writeFileSync(notifyFile, JSON.stringify({ targetId: OTHER }));
+  assert.equal(await storage.initNotifyStorage(), OTHER);
+  assert.equal(storage.getNotifyTarget(), OTHER);
+
+  fs.writeFileSync(notifyFile, JSON.stringify({ targetId: "" }));
+  assert.equal(await storage.initNotifyStorage(), null);
+
+  fs.writeFileSync(notifyFile, "{");
+  assert.equal(await storage.initNotifyStorage(), null);
+
+  storage.setNotifyTarget(USER);
+  storage.clearNotifyTarget();
+  await storage.flushWrites();
+  assert.equal(storage.getNotifyTarget(), null);
+  assert.equal(JSON.parse(fs.readFileSync(notifyFile, "utf8")).targetId, null);
+
+  assert.throws(() => storage.setNotifyTarget(""), /invalid notify target/);
+  assert.throws(() => storage.setNotifyTarget(123), /invalid notify target/);
+  assert.equal(storage.getNotifyTarget(), null);
+
+  await storage.closeStorage();
+  console.log("OK");
+} catch (err) {
+  console.error(err);
+  process.exitCode = 1;
+} finally {
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
-
-const owner = process.env.VERIFY_OWNER || `verify-${Date.now()}`;
-
-handleShoppingCommand(owner, "買 牛奶 @家樂福");
-handleShoppingCommand(owner, "買 電池");
-assert.equal(getItems(owner).length, 2);
-
-console.log(handleShoppingCommand(owner, "清單"));
-
-handleShoppingCommand(owner, "買到 1");
-assert.equal(getItems(owner).length, 1);
-
-handleShoppingCommand(owner, "清空清單");
-assert.equal(getItems(owner).length, 0);
-
-await flushWrites();
-await closeStorage();
-console.log("OK");
